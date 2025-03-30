@@ -9,8 +9,13 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.BufferedReader;
 import java.util.Scanner;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class MapReduceFiles {
+  // Constants for threading strategies
+  private static final int MIN_LINES_PER_MAP_THREAD = 1000;
+  private static final int MAX_LINES_PER_MAP_THREAD = 10000;
+  private static final int MAX_LINE_LENGTH = 80;
 
   public static void main(String[] args) {
 
@@ -167,42 +172,81 @@ public class MapReduceFiles {
 
       // MAP:
       long mapStartTime = System.currentTimeMillis();
-      final List<MappedItem> mappedItems = new LinkedList<MappedItem>();
+      final List<MappedItem> mappedItems = new CopyOnWriteArrayList<>();
 
       final MapCallback<String, MappedItem> mapCallback = new MapCallback<String, MappedItem>() {
         @Override
-        public synchronized void mapDone(String file, List<MappedItem> results) {
+        public synchronized void mapDone(String id, List<MappedItem> results) {
           mappedItems.addAll(results);
         }
       };
 
-      List<Thread> mapCluster = new ArrayList<Thread>(input.size());
+      // Use a middle value between min and max for initial testing
+      int linesPerMapThread = (MIN_LINES_PER_MAP_THREAD + MAX_LINES_PER_MAP_THREAD) / 2;
+      System.out.println("Using " + linesPerMapThread + " lines per map thread");
 
-      Iterator<Map.Entry<String, String>> inputIter = input.entrySet().iterator();
-      while(inputIter.hasNext()) {
-        Map.Entry<String, String> entry = inputIter.next();
-        final String file = entry.getKey();
-        final String contents = entry.getValue();
+      // Prepare all lines from all files
+      List<LineChunk> lineChunks = new ArrayList<>();
+      int chunkId = 0;
 
+      for (Map.Entry<String, String> entry : input.entrySet()) {
+        String file = entry.getKey();
+        String contents = entry.getValue();
+        
+        // Split content into lines
+        String[] lines = contents.split("\\r?\\n");
+        
+        // Process lines - split any that are too long
+        List<String> processedLines = new ArrayList<>();
+        for (String line : lines) {
+          if (line.length() > MAX_LINE_LENGTH) {
+            // Split at next whitespace after 80 chars
+            int pos = MAX_LINE_LENGTH;
+            while (pos < line.length() && !Character.isWhitespace(line.charAt(pos))) {
+              pos++;
+            }
+            if (pos < line.length()) {
+              processedLines.add(line.substring(0, pos));
+              processedLines.add(line.substring(pos).trim());
+            } else {
+              processedLines.add(line);
+            }
+          } else {
+            processedLines.add(line);
+          }
+        }
+        
+        // Group lines into chunks
+        for (int i = 0; i < processedLines.size(); i += linesPerMapThread) {
+          int end = Math.min(i + linesPerMapThread, processedLines.size());
+          List<String> chunk = processedLines.subList(i, end);
+          lineChunks.add(new LineChunk(chunkId++, file, chunk));
+        }
+      }
+
+      // Create and start map threads
+      List<Thread> mapCluster = new ArrayList<>();
+      for (final LineChunk chunk : lineChunks) {
         Thread t = new Thread(new Runnable() {
           @Override
           public void run() {
-            map(file, contents, mapCallback);
+            mapChunk(chunk, mapCallback);
           }
         });
         mapCluster.add(t);
         t.start();
       }
 
-      // wait for mapping phase to be over:
-      for(Thread t : mapCluster) {
+      // Wait for mapping phase to complete
+      for (Thread t : mapCluster) {
         try {
           t.join();
-        } catch(InterruptedException e) {
+        } catch (InterruptedException e) {
           throw new RuntimeException(e);
         }
       }
       long mapEndTime = System.currentTimeMillis();
+      System.out.println("Created " + lineChunks.size() + " map threads");
 
       // GROUP:
       long groupStartTime = System.currentTimeMillis();
@@ -271,6 +315,20 @@ public class MapReduceFiles {
     System.out.println("\nTotal program execution time: " + (endTimeOverall - startTimeOverall) + " ms");
   }
 
+  private static void mapChunk(LineChunk chunk, MapCallback<String, MappedItem> callback) {
+    List<MappedItem> results = new ArrayList<>();
+    String file = chunk.getFile();
+    
+    for (String line : chunk.getLines()) {
+      String[] words = line.trim().split("\\s+");
+      for (String word : words) {
+        results.add(new MappedItem(word, file));
+      }
+    }
+    
+    callback.mapDone("chunk-" + chunk.getId(), results);
+  }
+
   public static void map(String file, String contents, List<MappedItem> mappedItems) {
     String[] words = contents.trim().split("\\s+");
     for(String word: words) {
@@ -292,7 +350,6 @@ public class MapReduceFiles {
   }
 
   public static interface MapCallback<E, V> {
-
     public void mapDone(E key, List<V> values);
   }
 
@@ -306,12 +363,10 @@ public class MapReduceFiles {
   }
 
   public static interface ReduceCallback<E, K, V> {
-
     public void reduceDone(E e, Map<K,V> results);
   }
 
   public static void reduce(String word, List<String> list, ReduceCallback<String, String, Integer> callback) {
-
     Map<String, Integer> reducedList = new HashMap<String, Integer>();
     for(String file: list) {
       Integer occurrences = reducedList.get(file);
@@ -324,8 +379,23 @@ public class MapReduceFiles {
     callback.reduceDone(word, reducedList);
   }
 
-  private static class MappedItem {
+  private static class LineChunk {
+    private final int id;
+    private final String file;
+    private final List<String> lines;
+    
+    public LineChunk(int id, String file, List<String> lines) {
+      this.id = id;
+      this.file = file;
+      this.lines = lines;
+    }
+    
+    public int getId() { return id; }
+    public String getFile() { return file; }
+    public List<String> getLines() { return lines; }
+  }
 
+  private static class MappedItem {
     private final String word;
     private final String file;
 
