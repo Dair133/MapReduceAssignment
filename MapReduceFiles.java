@@ -14,15 +14,34 @@ public class MapReduceFiles {
 
   public static void main(String[] args) {
 
-    if (args.length < 1) {
-      System.err.println("usage: java MapReduceFiles file1.txt file2.txt file3.txt ...");
+    if (args.length != 1) {
+      System.err.println("usage: java MapReduceFiles directory_path");
+      System.exit(1);
+    }
+
+    String directoryPath = args[0];
+    File directory = new File(directoryPath);
+    
+    if (!directory.exists() || !directory.isDirectory()) {
+      System.err.println("Error: The specified path is not a valid directory: " + directoryPath);
+      System.exit(1);
+    }
+
+    // Get all files in the directory
+    File[] files = directory.listFiles();
+    
+    if (files == null || files.length == 0) {
+      System.err.println("Error: No files found in the directory: " + directoryPath);
       System.exit(1);
     }
 
     Map<String, String> input = new HashMap<String, String>();
     try {
-      for (String filename : args) {
-        input.put(filename, readFile(filename));
+      for (File file : files) {
+        if (file.isFile()) {
+          String filename = file.getAbsolutePath();
+          input.put(filename, readFile(filename));
+        }
       }
       System.out.println("Loaded " + input.size() + " files for processing");
     }
@@ -47,17 +66,17 @@ public class MapReduceFiles {
 
         for(String word : words) {
 
-          Map<String, Integer> files = output.get(word);
-          if (files == null) {
-            files = new HashMap<String, Integer>();
-            output.put(word, files);
+          Map<String, Integer> wordFiles = output.get(word);
+          if (wordFiles == null) {
+            wordFiles = new HashMap<String, Integer>();
+            output.put(word, wordFiles);
           }
 
-          Integer occurrences = files.remove(file);
+          Integer occurrences = wordFiles.remove(file);
           if (occurrences == null) {
-            files.put(file, 1);
+            wordFiles.put(file, 1);
           } else {
-            files.put(file, occurrences.intValue() + 1);
+            wordFiles.put(file, occurrences.intValue() + 1);
           }
         }
       }
@@ -310,5 +329,4 @@ public class MapReduceFiles {
       scanner.close();
     }
   }
-
 }
