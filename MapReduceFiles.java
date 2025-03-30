@@ -174,178 +174,212 @@ public class MapReduceFiles {
       System.out.println("Total execution: " + (endTime - startTime) + " ms");
     }
 
-
-    // APPROACH #3: Distributed MapReduce
-    {
-      System.out.println("\n=== APPROACH #3: Distributed MapReduce ===");
-      long startTime = System.currentTimeMillis();
-      
-      final Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
-
-      // MAP:
-      long mapStartTime = System.currentTimeMillis();
-      final List<MappedItem> mappedItems = new CopyOnWriteArrayList<>();
-
-      final MapCallback<String, MappedItem> mapCallback = new MapCallback<String, MappedItem>() {
-        @Override
-        public synchronized void mapDone(String id, List<MappedItem> results) {
-          mappedItems.addAll(results);
+    // APPROACH #3: Testing different threading configurations
+    System.out.println("\n=== APPROACH #3: Testing Different Thread Configurations ===");
+    
+    // Define the parameter values to test
+    int[] linesPerMapThreadValues = {1000, 2000, 5000, 10000};
+    int[] wordsPerReduceThreadValues = {100, 200, 500, 1000};
+    
+    // Store best results
+    long bestMapTime = Long.MAX_VALUE;
+    int bestLinesPerMapThread = 0;
+    long bestReduceTime = Long.MAX_VALUE;
+    int bestWordsPerReduceThread = 0;
+    
+    // Test map phase configurations with fixed reduce configuration
+    System.out.println("\n--- Testing Map Phase Configurations ---");
+    for (int linesPerMapThread : linesPerMapThreadValues) {
+        long mapTime = runTest(input, linesPerMapThread, 500);
+        if (mapTime < bestMapTime) {
+            bestMapTime = mapTime;
+            bestLinesPerMapThread = linesPerMapThread;
         }
-      };
-
-      // Use a middle value between min and max for initial testing
-      int linesPerMapThread = (MIN_LINES_PER_MAP_THREAD + MAX_LINES_PER_MAP_THREAD) / 2;
-      System.out.println("Using " + linesPerMapThread + " lines per map thread");
-
-      // Prepare all lines from all files
-      List<LineChunk> lineChunks = new ArrayList<>();
-      int chunkId = 0;
-
-      for (Map.Entry<String, String> entry : input.entrySet()) {
-        String file = entry.getKey();
-        String contents = entry.getValue();
-        
-        // Split content into lines
-        String[] lines = contents.split("\\r?\\n");
-        
-        // Process lines - split any that are too long
-        List<String> processedLines = new ArrayList<>();
-        for (String line : lines) {
-          if (line.length() > MAX_LINE_LENGTH) {
-            // Split at next whitespace after 80 chars
-            int pos = MAX_LINE_LENGTH;
-            while (pos < line.length() && !Character.isWhitespace(line.charAt(pos))) {
-              pos++;
-            }
-            if (pos < line.length()) {
-              processedLines.add(line.substring(0, pos));
-              processedLines.add(line.substring(pos).trim());
-            } else {
-              processedLines.add(line);
-            }
-          } else {
-            processedLines.add(line);
-          }
-        }
-        
-        // Group lines into chunks
-        for (int i = 0; i < processedLines.size(); i += linesPerMapThread) {
-          int end = Math.min(i + linesPerMapThread, processedLines.size());
-          List<String> chunk = processedLines.subList(i, end);
-          lineChunks.add(new LineChunk(chunkId++, file, chunk));
-        }
-      }
-
-      // Create and start map threads
-      List<Thread> mapCluster = new ArrayList<>();
-      for (final LineChunk chunk : lineChunks) {
-        Thread t = new Thread(new Runnable() {
-          @Override
-          public void run() {
-            mapChunk(chunk, mapCallback);
-          }
-        });
-        mapCluster.add(t);
-        t.start();
-      }
-
-      // Wait for mapping phase to complete
-      for (Thread t : mapCluster) {
-        try {
-          t.join();
-        } catch (InterruptedException e) {
-          throw new RuntimeException(e);
-        }
-      }
-      long mapEndTime = System.currentTimeMillis();
-      System.out.println("Created " + lineChunks.size() + " map threads");
-
-      // GROUP:
-      long groupStartTime = System.currentTimeMillis();
-      Map<String, List<String>> groupedItems = new HashMap<String, List<String>>();
-
-      Iterator<MappedItem> mappedIter = mappedItems.iterator();
-      while(mappedIter.hasNext()) {
-        MappedItem item = mappedIter.next();
-        String word = item.getWord();
-        String file = item.getFile();
-        List<String> list = groupedItems.get(word);
-        if (list == null) {
-          list = new LinkedList<String>();
-          groupedItems.put(word, list);
-        }
-        list.add(file);
-      }
-      
-      // Use a middle value between min and max for initial testing
-      int wordsPerReduceThread = (MIN_WORDS_PER_REDUCE_THREAD + MAX_WORDS_PER_REDUCE_THREAD) / 2;
-      System.out.println("Using " + wordsPerReduceThread + " words per reduce thread");
-      
-      // Create batches for reduce phase
-      List<ReduceBatch> reduceBatches = new ArrayList<>();
-      int batchId = 0;
-      List<String> currentBatchWords = new ArrayList<>();
-      
-      for (Map.Entry<String, List<String>> entry : groupedItems.entrySet()) {
-        currentBatchWords.add(entry.getKey());
-        
-        if (currentBatchWords.size() >= wordsPerReduceThread) {
-          reduceBatches.add(new ReduceBatch(batchId++, new ArrayList<>(currentBatchWords), groupedItems));
-          currentBatchWords.clear();
-        }
-      }
-      
-      // Add any remaining words as the final batch
-      if (!currentBatchWords.isEmpty()) {
-        reduceBatches.add(new ReduceBatch(batchId++, currentBatchWords, groupedItems));
-      }
-      
-      long groupEndTime = System.currentTimeMillis();
-
-      // REDUCE:
-      long reduceStartTime = System.currentTimeMillis();
-      final ReduceCallback<Integer, String, Map<String, Integer>> reduceCallback = new ReduceCallback<Integer, String, Map<String, Integer>>() {
-        @Override
-        public synchronized void reduceDone(Integer batchId, Map<String, Map<String, Integer>> results) {
-          output.putAll(results);
-        }
-      };
-
-      List<Thread> reduceCluster = new ArrayList<>(reduceBatches.size());
-
-      for (final ReduceBatch batch : reduceBatches) {
-        Thread t = new Thread(new Runnable() {
-          @Override
-          public void run() {
-            reduceBatch(batch, reduceCallback);
-          }
-        });
-        reduceCluster.add(t);
-        t.start();
-      }
-
-      // wait for reducing phase to be over:
-      for(Thread t : reduceCluster) {
-        try {
-          t.join();
-        } catch(InterruptedException e) {
-          throw new RuntimeException(e);
-        }
-      }
-      long reduceEndTime = System.currentTimeMillis();
-      System.out.println("Created " + reduceBatches.size() + " reduce threads");
-      
-      long endTime = System.currentTimeMillis();
-
-      System.out.println("Total words: " + output.size());
-      System.out.println("Map phase: " + (mapEndTime - mapStartTime) + " ms");
-      System.out.println("Group phase: " + (groupEndTime - groupStartTime) + " ms");
-      System.out.println("Reduce phase: " + (reduceEndTime - reduceStartTime) + " ms");
-      System.out.println("Total execution: " + (endTime - startTime) + " ms");
     }
+    
+    // Test reduce phase configurations with the best map configuration
+    System.out.println("\n--- Testing Reduce Phase Configurations ---");
+    for (int wordsPerReduceThread : wordsPerReduceThreadValues) {
+        long reduceTime = runTest(input, bestLinesPerMapThread, wordsPerReduceThread);
+        if (reduceTime < bestReduceTime) {
+            bestReduceTime = reduceTime;
+            bestWordsPerReduceThread = wordsPerReduceThread;
+        }
+    }
+    
+    // Run one final test with the best configuration
+    System.out.println("\n--- Running Final Test with Optimal Configuration ---");
+    System.out.println("Optimal Map Configuration: " + bestLinesPerMapThread + " lines per thread");
+    System.out.println("Optimal Reduce Configuration: " + bestWordsPerReduceThread + " words per thread");
+    runTest(input, bestLinesPerMapThread, bestWordsPerReduceThread);
     
     long endTimeOverall = System.currentTimeMillis();
     System.out.println("\nTotal program execution time: " + (endTimeOverall - startTimeOverall) + " ms");
+  }
+  
+  private static long runTest(Map<String, String> input, int linesPerMapThread, int wordsPerReduceThread) {
+    System.out.println("\nTesting with " + linesPerMapThread + " lines per map thread and " + 
+                      wordsPerReduceThread + " words per reduce thread");
+    
+    long startTime = System.currentTimeMillis();
+    final Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
+
+    // MAP:
+    long mapStartTime = System.currentTimeMillis();
+    final List<MappedItem> mappedItems = new CopyOnWriteArrayList<>();
+
+    final MapCallback<String, MappedItem> mapCallback = new MapCallback<String, MappedItem>() {
+      @Override
+      public synchronized void mapDone(String id, List<MappedItem> results) {
+        mappedItems.addAll(results);
+      }
+    };
+
+    // Prepare all lines from all files
+    List<LineChunk> lineChunks = new ArrayList<>();
+    int chunkId = 0;
+
+    for (Map.Entry<String, String> entry : input.entrySet()) {
+      String file = entry.getKey();
+      String contents = entry.getValue();
+      
+      // Split content into lines
+      String[] lines = contents.split("\\r?\\n");
+      
+      // Process lines - split any that are too long
+      List<String> processedLines = new ArrayList<>();
+      for (String line : lines) {
+        if (line.length() > MAX_LINE_LENGTH) {
+          // Split at next whitespace after 80 chars
+          int pos = MAX_LINE_LENGTH;
+          while (pos < line.length() && !Character.isWhitespace(line.charAt(pos))) {
+            pos++;
+          }
+          if (pos < line.length()) {
+            processedLines.add(line.substring(0, pos));
+            processedLines.add(line.substring(pos).trim());
+          } else {
+            processedLines.add(line);
+          }
+        } else {
+          processedLines.add(line);
+        }
+      }
+      
+      // Group lines into chunks
+      for (int i = 0; i < processedLines.size(); i += linesPerMapThread) {
+        int end = Math.min(i + linesPerMapThread, processedLines.size());
+        List<String> chunk = processedLines.subList(i, end);
+        lineChunks.add(new LineChunk(chunkId++, file, chunk));
+      }
+    }
+
+    // Create and start map threads
+    List<Thread> mapCluster = new ArrayList<>();
+    for (final LineChunk chunk : lineChunks) {
+      Thread t = new Thread(new Runnable() {
+        @Override
+        public void run() {
+          mapChunk(chunk, mapCallback);
+        }
+      });
+      mapCluster.add(t);
+      t.start();
+    }
+
+    // Wait for mapping phase to complete
+    for (Thread t : mapCluster) {
+      try {
+        t.join();
+      } catch (InterruptedException e) {
+        throw new RuntimeException(e);
+      }
+    }
+    long mapEndTime = System.currentTimeMillis();
+    long mapDuration = mapEndTime - mapStartTime;
+
+    // GROUP:
+    long groupStartTime = System.currentTimeMillis();
+    Map<String, List<String>> groupedItems = new HashMap<String, List<String>>();
+
+    Iterator<MappedItem> mappedIter = mappedItems.iterator();
+    while(mappedIter.hasNext()) {
+      MappedItem item = mappedIter.next();
+      String word = item.getWord();
+      String file = item.getFile();
+      List<String> list = groupedItems.get(word);
+      if (list == null) {
+        list = new LinkedList<String>();
+        groupedItems.put(word, list);
+      }
+      list.add(file);
+    }
+    
+    // Create batches for reduce phase
+    List<ReduceBatch> reduceBatches = new ArrayList<>();
+    int batchId = 0;
+    List<String> currentBatchWords = new ArrayList<>();
+    
+    for (Map.Entry<String, List<String>> entry : groupedItems.entrySet()) {
+      currentBatchWords.add(entry.getKey());
+      
+      if (currentBatchWords.size() >= wordsPerReduceThread) {
+        reduceBatches.add(new ReduceBatch(batchId++, new ArrayList<>(currentBatchWords), groupedItems));
+        currentBatchWords.clear();
+      }
+    }
+    
+    // Add any remaining words as the final batch
+    if (!currentBatchWords.isEmpty()) {
+      reduceBatches.add(new ReduceBatch(batchId++, currentBatchWords, groupedItems));
+    }
+    
+    long groupEndTime = System.currentTimeMillis();
+
+    // REDUCE:
+    long reduceStartTime = System.currentTimeMillis();
+    final ReduceCallback<Integer, String, Map<String, Integer>> reduceCallback = new ReduceCallback<Integer, String, Map<String, Integer>>() {
+      @Override
+      public synchronized void reduceDone(Integer batchId, Map<String, Map<String, Integer>> results) {
+        output.putAll(results);
+      }
+    };
+
+    List<Thread> reduceCluster = new ArrayList<>(reduceBatches.size());
+
+    for (final ReduceBatch batch : reduceBatches) {
+      Thread t = new Thread(new Runnable() {
+        @Override
+        public void run() {
+          reduceBatch(batch, reduceCallback);
+        }
+      });
+      reduceCluster.add(t);
+      t.start();
+    }
+
+    // wait for reducing phase to be over:
+    for(Thread t : reduceCluster) {
+      try {
+        t.join();
+      } catch(InterruptedException e) {
+        throw new RuntimeException(e);
+      }
+    }
+    long reduceEndTime = System.currentTimeMillis();
+    long reduceDuration = reduceEndTime - reduceStartTime;
+    
+    long groupDuration = groupEndTime - groupStartTime;
+    long endTime = System.currentTimeMillis();
+    long totalDuration = endTime - startTime;
+
+    System.out.println("Total words: " + output.size());
+    System.out.println("Map threads: " + lineChunks.size() + ", Map phase: " + mapDuration + " ms");
+    System.out.println("Group phase: " + groupDuration + " ms");
+    System.out.println("Reduce threads: " + reduceBatches.size() + ", Reduce phase: " + reduceDuration + " ms");
+    System.out.println("Total execution: " + totalDuration + " ms");
+    
+    return mapDuration + reduceDuration; // Return combined time for comparison
   }
 
   private static void reduceBatch(ReduceBatch batch, ReduceCallback<Integer, String, Map<String, Integer>> callback) {
