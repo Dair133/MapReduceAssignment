@@ -17,6 +17,8 @@ public class MapReduceFiles {
   // Constants for threading strategies
   private static final int MIN_LINES_PER_MAP_THREAD = 1000;
   private static final int MAX_LINES_PER_MAP_THREAD = 10000;
+  private static final int MIN_WORDS_PER_REDUCE_THREAD = 100;
+  private static final int MAX_WORDS_PER_REDUCE_THREAD = 1000;
   private static final int MAX_LINE_LENGTH = 80;
   
   // Pattern for word extraction - only letters, no numbers or symbols
@@ -274,29 +276,48 @@ public class MapReduceFiles {
         }
         list.add(file);
       }
+      
+      // Use a middle value between min and max for initial testing
+      int wordsPerReduceThread = (MIN_WORDS_PER_REDUCE_THREAD + MAX_WORDS_PER_REDUCE_THREAD) / 2;
+      System.out.println("Using " + wordsPerReduceThread + " words per reduce thread");
+      
+      // Create batches for reduce phase
+      List<ReduceBatch> reduceBatches = new ArrayList<>();
+      int batchId = 0;
+      List<String> currentBatchWords = new ArrayList<>();
+      
+      for (Map.Entry<String, List<String>> entry : groupedItems.entrySet()) {
+        currentBatchWords.add(entry.getKey());
+        
+        if (currentBatchWords.size() >= wordsPerReduceThread) {
+          reduceBatches.add(new ReduceBatch(batchId++, new ArrayList<>(currentBatchWords), groupedItems));
+          currentBatchWords.clear();
+        }
+      }
+      
+      // Add any remaining words as the final batch
+      if (!currentBatchWords.isEmpty()) {
+        reduceBatches.add(new ReduceBatch(batchId++, currentBatchWords, groupedItems));
+      }
+      
       long groupEndTime = System.currentTimeMillis();
 
       // REDUCE:
       long reduceStartTime = System.currentTimeMillis();
-      final ReduceCallback<String, String, Integer> reduceCallback = new ReduceCallback<String, String, Integer>() {
+      final ReduceCallback<Integer, String, Map<String, Integer>> reduceCallback = new ReduceCallback<Integer, String, Map<String, Integer>>() {
         @Override
-        public synchronized void reduceDone(String k, Map<String, Integer> v) {
-          output.put(k, v);
+        public synchronized void reduceDone(Integer batchId, Map<String, Map<String, Integer>> results) {
+          output.putAll(results);
         }
       };
 
-      List<Thread> reduceCluster = new ArrayList<Thread>(groupedItems.size());
+      List<Thread> reduceCluster = new ArrayList<>(reduceBatches.size());
 
-      Iterator<Map.Entry<String, List<String>>> groupedIter = groupedItems.entrySet().iterator();
-      while(groupedIter.hasNext()) {
-        Map.Entry<String, List<String>> entry = groupedIter.next();
-        final String word = entry.getKey();
-        final List<String> list = entry.getValue();
-
+      for (final ReduceBatch batch : reduceBatches) {
         Thread t = new Thread(new Runnable() {
           @Override
           public void run() {
-            reduce(word, list, reduceCallback);
+            reduceBatch(batch, reduceCallback);
           }
         });
         reduceCluster.add(t);
@@ -312,6 +333,8 @@ public class MapReduceFiles {
         }
       }
       long reduceEndTime = System.currentTimeMillis();
+      System.out.println("Created " + reduceBatches.size() + " reduce threads");
+      
       long endTime = System.currentTimeMillis();
 
       System.out.println("Total words: " + output.size());
@@ -323,6 +346,28 @@ public class MapReduceFiles {
     
     long endTimeOverall = System.currentTimeMillis();
     System.out.println("\nTotal program execution time: " + (endTimeOverall - startTimeOverall) + " ms");
+  }
+
+  private static void reduceBatch(ReduceBatch batch, ReduceCallback<Integer, String, Map<String, Integer>> callback) {
+    Map<String, Map<String, Integer>> results = new HashMap<>();
+    
+    for (String word : batch.getWords()) {
+      List<String> list = batch.getGroupedItems().get(word);
+      
+      Map<String, Integer> reducedList = new HashMap<>();
+      for (String file : list) {
+        Integer occurrences = reducedList.get(file);
+        if (occurrences == null) {
+          reducedList.put(file, 1);
+        } else {
+          reducedList.put(file, occurrences + 1);
+        }
+      }
+      
+      results.put(word, reducedList);
+    }
+    
+    callback.reduceDone(batch.getId(), results);
   }
 
   private static void mapChunk(LineChunk chunk, MapCallback<String, MappedItem> callback) {
@@ -388,7 +433,7 @@ public class MapReduceFiles {
   }
 
   public static interface ReduceCallback<E, K, V> {
-    public void reduceDone(E e, Map<K,V> results);
+    public void reduceDone(E e, Map<K, V> results);
   }
 
   public static void reduce(String word, List<String> list, ReduceCallback<String, String, Integer> callback) {
@@ -418,6 +463,22 @@ public class MapReduceFiles {
     public int getId() { return id; }
     public String getFile() { return file; }
     public List<String> getLines() { return lines; }
+  }
+  
+  private static class ReduceBatch {
+    private final int id;
+    private final List<String> words;
+    private final Map<String, List<String>> groupedItems;
+    
+    public ReduceBatch(int id, List<String> words, Map<String, List<String>> groupedItems) {
+      this.id = id;
+      this.words = words;
+      this.groupedItems = groupedItems;
+    }
+    
+    public int getId() { return id; }
+    public List<String> getWords() { return words; }
+    public Map<String, List<String>> getGroupedItems() { return groupedItems; }
   }
 
   private static class MappedItem {
