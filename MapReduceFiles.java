@@ -19,6 +19,10 @@ public class MapReduceFiles {
       System.exit(1);
     }
 
+    // Record start time for overall execution
+    long startTimeOverall = System.currentTimeMillis();
+
+
     Map<String, String> input = new HashMap<String, String>();
     try {
       for (String filename : args) {
@@ -34,7 +38,12 @@ public class MapReduceFiles {
     }
 
     // APPROACH #1: Brute force
-    {
+// APPROACH #1: Brute force
+{
+      System.out.println("\n=== APPROACH #1: Brute Force ===");
+      long startTime = System.currentTimeMillis();
+      long mapStartTime = System.currentTimeMillis();
+  
       Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
 
       Iterator<Map.Entry<String, String>> inputIter = input.entrySet().iterator();
@@ -63,18 +72,26 @@ public class MapReduceFiles {
       }
 
       // show me:
-      System.out.println(output);
+      long mapEndTime = System.currentTimeMillis();
+      // show me:
+      long endTime = System.currentTimeMillis();
+      System.out.println("Total words: " + output.size());
+      System.out.println("Map phase: " + (mapEndTime - mapStartTime) + " ms");
+      System.out.println("Total execution: " + (endTime - startTime) + " ms");
     }
 
 
     // APPROACH #2: MapReduce
-    {
+// APPROACH #2: MapReduce
+{
+      System.out.println("\n=== APPROACH #2: MapReduce ===");
+      long startTime = System.currentTimeMillis();
+  
       Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
 
       // MAP:
-
+      long mapStartTime = System.currentTimeMillis();
       List<MappedItem> mappedItems = new LinkedList<MappedItem>();
-
       Iterator<Map.Entry<String, String>> inputIter = input.entrySet().iterator();
       while(inputIter.hasNext()) {
         Map.Entry<String, String> entry = inputIter.next();
@@ -83,9 +100,9 @@ public class MapReduceFiles {
 
         map(file, contents, mappedItems);
       }
-
+      long mapEndTime = System.currentTimeMillis();
       // GROUP:
-
+      long groupStartTime = System.currentTimeMillis();
       Map<String, List<String>> groupedItems = new HashMap<String, List<String>>();
 
       Iterator<MappedItem> mappedIter = mappedItems.iterator();
@@ -100,10 +117,13 @@ public class MapReduceFiles {
         }
         list.add(file);
       }
-
+      long groupEndTime = System.currentTimeMillis();
       // REDUCE:
 
+      // REDUCE:
+      long reduceStartTime = System.currentTimeMillis();
       Iterator<Map.Entry<String, List<String>>> groupedIter = groupedItems.entrySet().iterator();
+
       while(groupedIter.hasNext()) {
         Map.Entry<String, List<String>> entry = groupedIter.next();
         String word = entry.getKey();
@@ -112,17 +132,30 @@ public class MapReduceFiles {
         reduce(word, list, output);
       }
 
-      System.out.println(output);
+      long reduceEndTime = System.currentTimeMillis();
+
+      long endTime = System.currentTimeMillis();
+      System.out.println("Total words: " + output.size());
+      System.out.println("Map phase: " + (mapEndTime - mapStartTime) + " ms");
+      System.out.println("Group phase: " + (groupEndTime - groupStartTime) + " ms");
+      System.out.println("Reduce phase: " + (reduceEndTime - reduceStartTime) + " ms");
+      System.out.println("Total execution: " + (endTime - startTime) + " ms");
     }
 
 
     // APPROACH #3: Distributed MapReduce
-    {
-      final Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
+// APPROACH #3: Distributed MapReduce
+{
+  System.out.println("\n=== APPROACH #3: Distributed MapReduce ===");
+  long startTime = System.currentTimeMillis();
+  
+  final Map<String, Map<String, Integer>> output = new HashMap<String, Map<String, Integer>>();
 
       // MAP:
 
-      final List<MappedItem> mappedItems = new LinkedList<MappedItem>();
+        // MAP:
+  long mapStartTime = System.currentTimeMillis();
+  final List<MappedItem> mappedItems = new LinkedList<MappedItem>();
 
       final MapCallback<String, MappedItem> mapCallback = new MapCallback<String, MappedItem>() {
         @Override
@@ -148,19 +181,22 @@ public class MapReduceFiles {
         mapCluster.add(t);
         t.start();
       }
-
       // wait for mapping phase to be over:
-      for(Thread t : mapCluster) {
-        try {
-          t.join();
-        } catch(InterruptedException e) {
-          throw new RuntimeException(e);
-        }
-      }
+// wait for mapping phase to be over:
+for(Thread t : mapCluster) {
+  try {
+    t.join();
+  } catch(InterruptedException e) {
+    throw new RuntimeException(e);
+  }
+}
+long mapEndTime = System.currentTimeMillis();
 
       // GROUP:
 
-      Map<String, List<String>> groupedItems = new HashMap<String, List<String>>();
+        // GROUP:
+  long groupStartTime = System.currentTimeMillis();
+  Map<String, List<String>> groupedItems = new HashMap<String, List<String>>();
 
       Iterator<MappedItem> mappedIter = mappedItems.iterator();
       while(mappedIter.hasNext()) {
@@ -174,16 +210,18 @@ public class MapReduceFiles {
         }
         list.add(file);
       }
-
+      long groupEndTime = System.currentTimeMillis();
       // REDUCE:
 
-      final ReduceCallback<String, String, Integer> reduceCallback = new ReduceCallback<String, String, Integer>() {
+        // REDUCE:
+  long reduceStartTime = System.currentTimeMillis();
+  final ReduceCallback<String, String, Integer> reduceCallback = new ReduceCallback<String, String, Integer>() {
         @Override
         public synchronized void reduceDone(String k, Map<String, Integer> v) {
           output.put(k, v);
         }
       };
-
+      
       List<Thread> reduceCluster = new ArrayList<Thread>(groupedItems.size());
 
       Iterator<Map.Entry<String, List<String>>> groupedIter = groupedItems.entrySet().iterator();
@@ -211,8 +249,17 @@ public class MapReduceFiles {
         }
       }
 
-      System.out.println(output);
+      long reduceEndTime = System.currentTimeMillis();
+
+      long endTime = System.currentTimeMillis();
+      System.out.println("Total words: " + output.size());
+      System.out.println("Map phase: " + (mapEndTime - mapStartTime) + " ms");
+      System.out.println("Group phase: " + (groupEndTime - groupStartTime) + " ms");
+      System.out.println("Reduce phase: " + (reduceEndTime - reduceStartTime) + " ms");
+      System.out.println("Total execution: " + (endTime - startTime) + " ms");
     }
+    long endTimeOverall = System.currentTimeMillis();
+    System.out.println("\nTotal program execution time: " + (endTimeOverall - startTimeOverall) + " ms");
   }
 
   public static void map(String file, String contents, List<MappedItem> mappedItems) {
