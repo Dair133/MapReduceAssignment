@@ -14,16 +14,17 @@ public class MapReduceFiles {
 
   public static void main(String[] args) {
 
-    if (args.length < 3) {
-      System.err.println("usage: java MapReduceFiles file1.txt file2.txt file3.txt");
-
+    if (args.length < 1) {
+      System.err.println("usage: java MapReduceFiles file1.txt file2.txt file3.txt ...");
+      System.exit(1);
     }
 
     Map<String, String> input = new HashMap<String, String>();
     try {
-      input.put(args[0], readFile(args[0]));
-      input.put(args[1], readFile(args[1]));
-      input.put(args[2], readFile(args[2]));
+      for (String filename : args) {
+        input.put(filename, readFile(filename));
+      }
+      System.out.println("Loaded " + input.size() + " files for processing");
     }
     catch (IOException ex)
     {
