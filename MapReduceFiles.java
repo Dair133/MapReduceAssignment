@@ -10,12 +10,17 @@ import java.io.FileReader;
 import java.io.BufferedReader;
 import java.util.Scanner;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 public class MapReduceFiles {
   // Constants for threading strategies
   private static final int MIN_LINES_PER_MAP_THREAD = 1000;
   private static final int MAX_LINES_PER_MAP_THREAD = 10000;
   private static final int MAX_LINE_LENGTH = 80;
+  
+  // Pattern for word extraction - only letters, no numbers or symbols
+  private static final Pattern WORD_PATTERN = Pattern.compile("\\b([a-zA-Z]+)\\b");
 
   public static void main(String[] args) {
 
@@ -77,18 +82,23 @@ public class MapReduceFiles {
         String[] words = contents.trim().split("\\s+");
 
         for(String word : words) {
+          // Extract only the word part (no punctuation)
+          Matcher matcher = WORD_PATTERN.matcher(word);
+          if (matcher.find()) {
+            word = matcher.group(1).toLowerCase();
+            
+            Map<String, Integer> wordFiles = output.get(word);
+            if (wordFiles == null) {
+              wordFiles = new HashMap<String, Integer>();
+              output.put(word, wordFiles);
+            }
 
-          Map<String, Integer> wordFiles = output.get(word);
-          if (wordFiles == null) {
-            wordFiles = new HashMap<String, Integer>();
-            output.put(word, wordFiles);
-          }
-
-          Integer occurrences = wordFiles.remove(file);
-          if (occurrences == null) {
-            wordFiles.put(file, 1);
-          } else {
-            wordFiles.put(file, occurrences.intValue() + 1);
+            Integer occurrences = wordFiles.remove(file);
+            if (occurrences == null) {
+              wordFiles.put(file, 1);
+            } else {
+              wordFiles.put(file, occurrences.intValue() + 1);
+            }
           }
         }
       }
@@ -322,7 +332,12 @@ public class MapReduceFiles {
     for (String line : chunk.getLines()) {
       String[] words = line.trim().split("\\s+");
       for (String word : words) {
-        results.add(new MappedItem(word, file));
+        // Extract only the word part (no punctuation)
+        Matcher matcher = WORD_PATTERN.matcher(word);
+        if (matcher.find()) {
+          word = matcher.group(1).toLowerCase();
+          results.add(new MappedItem(word, file));
+        }
       }
     }
     
@@ -332,7 +347,12 @@ public class MapReduceFiles {
   public static void map(String file, String contents, List<MappedItem> mappedItems) {
     String[] words = contents.trim().split("\\s+");
     for(String word: words) {
-      mappedItems.add(new MappedItem(word, file));
+      // Extract only the word part (no punctuation)
+      Matcher matcher = WORD_PATTERN.matcher(word);
+      if (matcher.find()) {
+        word = matcher.group(1).toLowerCase();
+        mappedItems.add(new MappedItem(word, file));
+      }
     }
   }
 
@@ -357,7 +377,12 @@ public class MapReduceFiles {
     String[] words = contents.trim().split("\\s+");
     List<MappedItem> results = new ArrayList<MappedItem>(words.length);
     for(String word: words) {
-      results.add(new MappedItem(word, file));
+      // Extract only the word part (no punctuation)
+      Matcher matcher = WORD_PATTERN.matcher(word);
+      if (matcher.find()) {
+        word = matcher.group(1).toLowerCase();
+        results.add(new MappedItem(word, file));
+      }
     }
     callback.mapDone(file, results);
   }
